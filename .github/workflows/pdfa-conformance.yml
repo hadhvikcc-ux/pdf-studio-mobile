@@ -1,0 +1,47 @@
+name: PDF/A conformance
+
+# Builds a PDF/A-2b file on an Android emulator (the exporter needs Android APIs) and validates it with veraPDF.
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/pdfa-conformance.yml"]
+  pull_request:
+    paths: ["android/**", ".github/workflows/pdfa-conformance.yml"]
+  workflow_dispatch:
+
+jobs:
+  verapdf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Instrumented tests (OCR + export)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          working-directory: android
+          script: |
+            ./gradlew --no-daemon :app:installDebug :app:installDebugAndroidTest
+            adb shell am instrument -w com.pdfstudio.app.test/androidx.test.runner.AndroidJUnitRunner | tee ../instrument.txt
+            grep -q "^OK (" ../instrument.txt
+            adb exec-out run-as com.pdfstudio.app cat files/pdfa-out.pdf > ../pdfa-out.pdf
+      - name: Validate with veraPDF (PDF/A-2b)
+        run: docker run --rm -v "$PWD":/data verapdf/cli --flavour 2b --format text /data/pdfa-out.pdf
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pdfa-out
+          path: pdfa-out.pdf
+          if-no-files-found: ignore

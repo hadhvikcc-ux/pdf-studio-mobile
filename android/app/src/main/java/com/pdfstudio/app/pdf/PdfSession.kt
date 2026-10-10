@@ -21,6 +21,11 @@ class PdfSession(file: File) : AutoCloseable {
     /** Height / width of the first page; used only as a placeholder size before a page renders. */
     val aspect: Float = if (pageCount == 0) 1.4f else renderer.openPage(0).use { it.height.toFloat() / it.width }
 
+    /** Page size in PDF points (1/72 inch). */
+    suspend fun size(index: Int): Pair<Int, Int> = lock.withLock {
+        renderer.openPage(index).use { it.width to it.height }
+    }
+
     suspend fun render(index: Int, widthPx: Int): Bitmap = lock.withLock {
         withContext(Dispatchers.Default) {
             renderer.openPage(index).use { page ->

@@ -2,7 +2,7 @@ package com.pdfstudio.app.data
 
 data class DocInfo(val id: String, val name: String, val opened: Long)
 
-enum class Tool { None, Ink, Highlight }
+enum class Tool { None, Ink, Highlight, Edit }
 
 /**
  * A freehand stroke or highlight on one page. Coordinates are normalised to 0..1 with the origin at

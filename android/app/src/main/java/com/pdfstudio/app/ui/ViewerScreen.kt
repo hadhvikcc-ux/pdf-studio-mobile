@@ -6,6 +6,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
@@ -53,6 +56,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,6 +70,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -79,13 +84,25 @@ import com.pdfstudio.app.AppViewModel
 import com.pdfstudio.app.R
 import com.pdfstudio.app.ToolOp
 import com.pdfstudio.app.data.Annot
+import com.pdfstudio.app.edit.EditOp
+import com.pdfstudio.app.edit.ImageBox
+import com.pdfstudio.app.edit.InfoFields
+import com.pdfstudio.app.edit.PageContent
+import com.pdfstudio.app.edit.TextRun
 import com.pdfstudio.app.data.Tool
 import com.pdfstudio.app.pdf.PdfSession
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
-private enum class Dlg { None, Search, Navigate, Tools, Versions, Sync }
+private enum class Dlg { None, Search, Navigate, Tools, Versions, Sync, Meta }
+
+/** What the user tapped in Edit mode. Coordinates are normalised page positions. */
+private sealed interface EditTarget {
+    data class Text(val page: Int, val run: TextRun) : EditTarget
+    data class Image(val page: Int, val box: ImageBox) : EditTarget
+    data class Empty(val page: Int, val x: Float, val y: Float) : EditTarget
+}
 
 private const val INK = 0xC62828
 private const val HIGHLIGHT = 0xFFEB3B
@@ -109,6 +126,17 @@ fun ViewerScreen(vm: AppViewModel) {
     val scope = rememberCoroutineScope()
     val page by remember { derivedStateOf { listState.firstVisibleItemIndex } }
 
+    var editTarget by remember { mutableStateOf<EditTarget?>(null) }
+    var pickFor by remember { mutableStateOf<EditTarget?>(null) }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val t = pickFor
+        pickFor = null
+        if (uri != null) when (t) {
+            is EditTarget.Empty -> vm.placeImage(uri, t.page, t.x, t.y, null)
+            is EditTarget.Image -> vm.placeImage(uri, t.page, 0f, 0f, t.box)
+            else -> Unit
+        }
+    }
     val mergePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { vm.mergeWith(it) }
     }
@@ -157,18 +185,23 @@ fun ViewerScreen(vm: AppViewModel) {
         },
         bottomBar = {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 FilterChip(tool == Tool.None, { tool = Tool.None }, { Text(stringResource(R.string.tool_none)) })
                 FilterChip(tool == Tool.Ink, { tool = Tool.Ink }, { Text(stringResource(R.string.tool_ink)) })
                 FilterChip(tool == Tool.Highlight, { tool = Tool.Highlight }, { Text(stringResource(R.string.tool_highlight)) })
+                FilterChip(tool == Tool.Edit, { tool = Tool.Edit }, { Text(stringResource(R.string.tool_edit)) })
+                if (vm.edits.isNotEmpty()) {
+                    TextButton(onClick = { vm.saveEdits() }) { Text(stringResource(R.string.edit_save, vm.edits.size)) }
+                    TextButton(onClick = { vm.discardEdits() }) { Text(stringResource(R.string.edit_discard)) }
+                }
                 if (vm.annots.isNotEmpty()) {
                     TextButton(onClick = { vm.undoAnnot() }) { Text(stringResource(R.string.undo)) }
                     TextButton(onClick = { vm.saveAnnotations() }) { Text(stringResource(R.string.save_annotations)) }
                 }
-                Box(Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
                 if (session != null) {
                     Text(stringResource(R.string.page_of, page + 1, session.pageCount), style = MaterialTheme.typography.labelMedium)
                 }
@@ -184,8 +217,21 @@ fun ViewerScreen(vm: AppViewModel) {
                 val ratio = scale / old
                 offX = ((offX - baseWpx / 2) * ratio + baseWpx / 2 + pan.x).coerceIn(-(baseWpx * (scale - 1f)), 0f)
             }
+            if (tool == Tool.Edit) {
+                Text(
+                    stringResource(R.string.edit_hint),
+                    Modifier.align(Alignment.TopCenter).padding(8.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             if (vm.busy || (session == null && !vm.needsPassword)) {
-                CircularProgressIndicator(Modifier.align(Alignment.Center))
+                Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    vm.progress?.let { (done, total) ->
+                        Text(stringResource(R.string.progress_pages, minOf(done + 1, total), total), Modifier.padding(top = 8.dp))
+                    }
+                }
             }
             if (session != null) {
                 // Re-render only at coarse zoom steps so pinching stays smooth.
@@ -208,7 +254,14 @@ fun ViewerScreen(vm: AppViewModel) {
                         PageView(
                             session = session, index = i, renderWidthPx = renderW,
                             widthPx = baseWpx * scale, offsetX = offX, tool = tool, vm = vm, night = night,
-                            aspect = session.aspect
+                            aspect = session.aspect,
+                            onEditTap = { p, x, y, run, img ->
+                                editTarget = when {
+                                    run != null -> EditTarget.Text(p, run)
+                                    img != null -> EditTarget.Image(p, img)
+                                    else -> EditTarget.Empty(p, x, y)
+                                }
+                            }
                         )
                     }
                 }
@@ -233,11 +286,19 @@ fun ViewerScreen(vm: AppViewModel) {
                     TextButton(onClick = { dlg = Dlg.None; input = ToolOp.Reorder }) { Text(stringResource(R.string.reorder)) }
                     TextButton(onClick = { dlg = Dlg.None; input = ToolOp.Watermark }) { Text(stringResource(R.string.watermark)) }
                     TextButton(onClick = { dlg = Dlg.None; input = ToolOp.Protect }) { Text(stringResource(R.string.protect)) }
+                    TextButton(onClick = { dlg = Dlg.Meta }) { Text(stringResource(R.string.edit_properties)) }
+                    TextButton(onClick = { dlg = Dlg.None; vm.runOcr() }) { Text(stringResource(R.string.ocr)) }
+                    TextButton(onClick = { dlg = Dlg.None; vm.exportPdfA(true) }) { Text(stringResource(R.string.export_pdfa)) }
                     TextButton(onClick = { dlg = Dlg.None; vm.sharePdf() }) { Text(stringResource(R.string.share_pdf)) }
                     TextButton(onClick = { dlg = Dlg.None; vm.sharePagePng(page) }) { Text(stringResource(R.string.share_png)) }
                 }
             }
         )
+        Dlg.Meta -> {
+            // Parsing the file can take a moment on large documents, so load off the main thread.
+            val info by produceState<InfoFields?>(null) { value = vm.readInfo() }
+            info?.let { MetaDialog(it, onSave = { f -> dlg = Dlg.None; vm.saveInfo(f) }, onCancel = { dlg = Dlg.None }) }
+        }
         Dlg.Versions -> AlertDialog(
             onDismissRequest = { dlg = Dlg.None },
             confirmButton = { TextButton(onClick = { dlg = Dlg.None }) { Text(stringResource(R.string.close)) } },
@@ -272,6 +333,35 @@ fun ViewerScreen(vm: AppViewModel) {
         )
     }
 
+    when (val t = editTarget) {
+        null -> Unit
+        is EditTarget.Text -> EditTextDialog(
+            title = R.string.edit_text, initial = t.run.text, showSize = false,
+            onApply = { text, _ -> editTarget = null; if (text != t.run.text) vm.addEdit(EditOp.ReplaceText(t.page, t.run, text)) },
+            onCancel = { editTarget = null }
+        )
+        is EditTarget.Image -> AlertDialog(
+            onDismissRequest = { editTarget = null },
+            title = { Text(stringResource(R.string.edit_image)) },
+            text = {
+                Column {
+                    TextButton(onClick = { editTarget = null; vm.addEdit(EditOp.DeleteImage(t.page, t.box)) }) { Text(stringResource(R.string.edit_image_delete)) }
+                    TextButton(onClick = { pickFor = t; editTarget = null; imagePicker.launch("image/*") }) { Text(stringResource(R.string.edit_image_replace)) }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { editTarget = null }) { Text(stringResource(R.string.cancel)) } }
+        )
+        is EditTarget.Empty -> EditTextDialog(
+            title = R.string.edit_add_text, initial = "", showSize = true,
+            onApply = { text, size -> editTarget = null; vm.addEdit(EditOp.AddText(t.page, t.x, t.y, text, size)) },
+            onCancel = { editTarget = null },
+            extra = {
+                TextButton(onClick = { pickFor = t; editTarget = null; imagePicker.launch("image/*") }) { Text(stringResource(R.string.edit_add_image)) }
+            }
+        )
+    }
+
     input?.let { op ->
         TextInputDialog(
             op = op,
@@ -284,8 +374,12 @@ fun ViewerScreen(vm: AppViewModel) {
 @Composable
 private fun PageView(
     session: PdfSession, index: Int, renderWidthPx: Int, widthPx: Float, offsetX: Float,
-    tool: Tool, vm: AppViewModel, night: Boolean, aspect: Float
+    tool: Tool, vm: AppViewModel, night: Boolean, aspect: Float,
+    onEditTap: (page: Int, x: Float, y: Float, run: TextRun?, image: ImageBox?) -> Unit
 ) {
+    val content by produceState<PageContent?>(null, vm.version, index, tool == Tool.Edit) {
+        value = if (tool == Tool.Edit) vm.pageContent(index) else null
+    }
     val density = LocalDensity.current
     var bmp by remember(session, index) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(session, index, renderWidthPx) {
@@ -316,23 +410,32 @@ private fun PageView(
         }
         val mine = vm.annots.filter { it.page == index }
         Canvas(
-            Modifier.matchParentSize().pointerInput(tool, index) {
-                if (tool == Tool.None) return@pointerInput
-                detectDragGestures(
-                    onDragStart = { o -> live = listOf(o.x / size.width, o.y / size.height) },
-                    onDrag = { change, _ ->
-                        change.consume()
-                        live = live + listOf(change.position.x / size.width, change.position.y / size.height)
-                    },
-                    onDragEnd = {
-                        if (live.size >= 4) {
-                            val pts = if (tool == Tool.Highlight) listOf(live[0], live[1], live[live.size - 2], live[live.size - 1]) else live
-                            vm.addAnnot(Annot(index, tool, if (tool == Tool.Highlight) HIGHLIGHT else INK, pts))
-                        }
-                        live = emptyList()
-                    },
-                    onDragCancel = { live = emptyList() }
-                )
+            Modifier.matchParentSize().pointerInput(tool, index, content) {
+                when (tool) {
+                    Tool.None -> return@pointerInput
+                    Tool.Edit -> detectTapGestures { o ->
+                        val nx = o.x / size.width
+                        val ny = o.y / size.height
+                        val run = content?.runs?.firstOrNull { nx in it.left..it.right && ny in it.top..it.bottom }
+                        val img = if (run == null) content?.images?.firstOrNull { nx in it.left..it.right && ny in it.top..it.bottom } else null
+                        onEditTap(index, nx, ny, run, img)
+                    }
+                    else -> detectDragGestures(
+                        onDragStart = { o -> live = listOf(o.x / size.width, o.y / size.height) },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            live = live + listOf(change.position.x / size.width, change.position.y / size.height)
+                        },
+                        onDragEnd = {
+                            if (live.size >= 4) {
+                                val pts = if (tool == Tool.Highlight) listOf(live[0], live[1], live[live.size - 2], live[live.size - 1]) else live
+                                vm.addAnnot(Annot(index, tool, if (tool == Tool.Highlight) HIGHLIGHT else INK, pts))
+                            }
+                            live = emptyList()
+                        },
+                        onDragCancel = { live = emptyList() }
+                    )
+                }
             }
         ) {
             fun draw(t: Tool, color: Int, pts: List<Float>) {
@@ -356,6 +459,35 @@ private fun PageView(
                 }
             }
             mine.forEach { draw(it.tool, it.color, it.pts) }
+            if (tool == Tool.Edit) {
+                val w = size.width
+                val h = size.height
+                content?.runs?.forEach {
+                    drawRect(Color(0xFF1E88E5), Offset(it.left * w, it.top * h), androidx.compose.ui.geometry.Size((it.right - it.left) * w, (it.bottom - it.top) * h), style = Stroke(1.5f))
+                }
+                content?.images?.forEach {
+                    drawRect(Color(0xFFFB8C00), Offset(it.left * w, it.top * h), androidx.compose.ui.geometry.Size((it.right - it.left) * w, (it.bottom - it.top) * h), style = Stroke(3f))
+                }
+                // Preview of queued edits; the real result appears once saved.
+                val paint = android.graphics.Paint().apply { color = android.graphics.Color.BLACK; isAntiAlias = true }
+                vm.edits.filter { it.page == index }.forEach { op ->
+                    when (op) {
+                        is EditOp.ReplaceText -> {
+                            val r = op.run
+                            drawRect(Color.White, Offset(r.left * w, r.top * h), androidx.compose.ui.geometry.Size((r.right - r.left) * w, (r.bottom - r.top) * h))
+                            drawRect(Color(0xFF43A047), Offset(r.left * w, r.top * h), androidx.compose.ui.geometry.Size((r.right - r.left) * w, (r.bottom - r.top) * h), style = Stroke(2f))
+                            paint.textSize = (r.bottom - r.top) * h * 0.75f
+                            drawContext.canvas.nativeCanvas.drawText(op.newText, r.left * w, r.baseline * h, paint)
+                        }
+                        is EditOp.AddText -> {
+                            paint.textSize = op.sizePt / 595f * w // preview assumes an A4-wide page
+                            drawContext.canvas.nativeCanvas.drawText(op.text, op.x * w, op.y * h + paint.textSize, paint)
+                        }
+                        is EditOp.DeleteImage -> drawRect(Color(0x66E53935), Offset(op.image.left * w, op.image.top * h), androidx.compose.ui.geometry.Size((op.image.right - op.image.left) * w, (op.image.bottom - op.image.top) * h))
+                        is EditOp.PlaceImage -> drawRect(Color(0xFF1E88E5), Offset(op.left * w, op.top * h), androidx.compose.ui.geometry.Size((op.right - op.left) * w, (op.bottom - op.top) * h), style = Stroke(4f))
+                    }
+                }
+            }
             if (live.isNotEmpty()) {
                 val pts = if (tool == Tool.Highlight && live.size >= 4) listOf(live[0], live[1], live[live.size - 2], live[live.size - 1]) else live
                 draw(tool, if (tool == Tool.Highlight) HIGHLIGHT else INK, pts)
@@ -472,5 +604,60 @@ private fun NavigateDialog(vm: AppViewModel, session: PdfSession, onGo: (Int) ->
             }
         },
         confirmButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.close)) } }
+    )
+}
+
+@Composable
+private fun EditTextDialog(
+    title: Int, initial: String, showSize: Boolean,
+    onApply: (text: String, sizePt: Float) -> Unit, onCancel: () -> Unit,
+    extra: (@Composable () -> Unit)? = null
+) {
+    var text by remember { mutableStateOf(initial) }
+    var size by remember { mutableStateOf("14") }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(stringResource(title)) },
+        text = {
+            Column {
+                OutlinedTextField(text, { text = it }, label = { Text(stringResource(R.string.edit_text_hint)) })
+                if (showSize) {
+                    OutlinedTextField(
+                        size, { size = it.filter { c -> c.isDigit() }.take(3) },
+                        label = { Text(stringResource(R.string.edit_font_size)) }, singleLine = true,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                extra?.invoke()
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = text.isNotBlank(), onClick = { onApply(text, (size.toFloatOrNull() ?: 14f).coerceIn(4f, 200f)) }) {
+                Text(stringResource(R.string.apply))
+            }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) } }
+    )
+}
+
+@Composable
+private fun MetaDialog(initial: InfoFields, onSave: (InfoFields) -> Unit, onCancel: () -> Unit) {
+    var title by remember { mutableStateOf(initial.title) }
+    var author by remember { mutableStateOf(initial.author) }
+    var subject by remember { mutableStateOf(initial.subject) }
+    var keywords by remember { mutableStateOf(initial.keywords) }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(stringResource(R.string.edit_properties)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(title, { title = it }, label = { Text(stringResource(R.string.meta_title)) }, singleLine = true)
+                OutlinedTextField(author, { author = it }, label = { Text(stringResource(R.string.meta_author)) }, singleLine = true)
+                OutlinedTextField(subject, { subject = it }, label = { Text(stringResource(R.string.meta_subject)) }, singleLine = true)
+                OutlinedTextField(keywords, { keywords = it }, label = { Text(stringResource(R.string.meta_keywords)) }, singleLine = true)
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(InfoFields(title, author, subject, keywords)) }) { Text(stringResource(R.string.apply)) } },
+        dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) } }
     )
 }

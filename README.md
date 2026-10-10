@@ -41,7 +41,13 @@ Apple Developer account and signing secrets added to CI (not configured here).
 | Highlight, freehand ink | ✅ (burned in as vector) | ✅ (real PDF annotations) |
 | Comments | ❌ | ✅ (sticky note) |
 | Merge, split, reorder/delete pages | ✅ | ✅ |
+| **Edit existing text** | ✅ in place when safe, otherwise cover + overwrite | ⚠️ cover + overwrite only |
+| **Add text** | ✅ | ✅ (FreeText annotation) |
+| **Add / replace / delete images** | ✅ | ➕ add only (flattens annotations) |
+| **Edit document properties** (title, author, subject, keywords) | ✅ | ✅ |
 | Watermark | ✅ | ❌ |
+| **OCR** (make scans searchable) | ✅ ML Kit, offline | ✅ Vision, offline |
+| **PDF/A-2b export** | ✅ (rasterised, validated with veraPDF in CI) | ❌ not possible on-device, needs a server |
 | Password protect / open protected PDFs | ✅ AES-256 | ✅ |
 | Version history + restore (local, immutable versions) | ✅ | ✅ |
 | Share PDF / page as PNG | ✅ | ✅ |
@@ -51,10 +57,38 @@ Apple Developer account and signing secrets added to CI (not configured here).
 
 ## Not built yet (needs backend or paid SDKs)
 
-Editing existing text/images, headers/footers, export to PDF/A / Word / Excel, OCR, certificate-based
+Headers/footers, export to Word / Excel, certificate-based
 digital signatures, multi-user collaboration, server-backed sync, crash reporting and analytics, and the
 Node/Java microservices. See the design document for how each is planned; the on-device parts here are
 structured so a server implementation can replace them.
+
+## Editing notes
+
+Tap **Edit** in the bottom bar, then tap a line of text, an image, or empty space. Changes are queued (Android
+shows them as overlays) and saved together as one new version, so every edit can be undone from version history.
+
+* **Android text replacement** tries a true in-place edit of the page's content stream first. That removes the old
+  text from the file, but only works when exactly one text operator on the page matches and the font can encode the
+  new characters (subset fonts often cannot). Otherwise it **covers the old text with a white box and writes the new
+  text on top; the old text stays in the file** and can still be selected or extracted. The save message tells you
+  how many edits fell into each case.
+* **iOS** can only do the cover-and-overwrite variant, because PDFKit does not expose page content. Added text
+  is a standard FreeText annotation. Inserting an image rebuilds the file and flattens existing annotations.
+* Neither platform is a redaction tool; do not use text edits to remove sensitive information.
+* Edits assume unrotated pages; text in rotated pages or rotated images may be positioned wrongly.
+* Fonts: new text uses the device's system font (Android) or the system font (iOS); the original font is not matched.
+
+## OCR and PDF/A notes
+
+* **OCR** recognises Latin-script text only (accented letters included). It adds an invisible text layer to pages
+  that have no text, so search, copy and the PDF/A export keep working. Accuracy depends on scan quality.
+* **PDF/A-2b (Android only)**: the exporter rasterises each page (about 200 dpi JPEG), attaches an sRGB output intent and
+  XMP conformance metadata, and, when "searchable" is on, an OCR text layer in an embedded system font. The result is a
+  new library document; files are larger than the source and source links/vector text are not preserved. The
+  `PDF/A conformance` workflow generates a file on an emulator and checks it with veraPDF.
+* iOS has no PDF/A export: Core Graphics cannot write the required structures. Doing it properly needs a server
+  (iText/PDFBox) or a commercial SDK.
+* iOS OCR rebuilds the PDF through Core Graphics, which drops annotations and page rotation; save annotations first.
 
 ## Known limitations
 

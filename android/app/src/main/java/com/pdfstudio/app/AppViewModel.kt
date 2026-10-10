@@ -14,7 +14,16 @@ import androidx.lifecycle.viewModelScope
 import com.pdfstudio.app.data.Annot
 import com.pdfstudio.app.data.DocInfo
 import com.pdfstudio.app.data.DocRepo
+import com.pdfstudio.app.edit.EditOp
+import com.pdfstudio.app.edit.ImageBox
+import com.pdfstudio.app.edit.InfoFields
+import com.pdfstudio.app.edit.PageContent
+import com.pdfstudio.app.edit.PdfAnalyzer
+import com.pdfstudio.app.edit.PdfEditor
+import com.pdfstudio.app.pdf.OcrEngine
+import com.pdfstudio.app.pdf.OcrPipeline
 import com.pdfstudio.app.pdf.PdfSession
+import com.pdfstudio.app.pdf.PdfaExporter
 import com.pdfstudio.app.pdf.PdfTools
 import com.pdfstudio.app.pdf.RangeParser
 import com.pdfstudio.app.pdf.SearchHit
@@ -43,7 +52,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var message by mutableStateOf<Msg?>(null)
     var needsPassword by mutableStateOf(false); private set
     var busy by mutableStateOf(false); private set
+    /** (done, total) while OCR or PDF/A export is running. */
+    var progress by mutableStateOf<Pair<Int, Int>?>(null); private set
     val annots = mutableStateListOf<Annot>()
+    /** Pending content edits (text, images); applied together by [saveEdits]. */
+    val edits = mutableStateListOf<EditOp>()
+    private val contentCache = HashMap<Pair<Int, Int>, PageContent>()
+
+    private var ocr: OcrEngine? = null
+    private fun engine(): OcrEngine = ocr ?: OcrEngine().also { ocr = it }
 
     init { PdfTools.init(app) }
 
@@ -55,7 +72,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun launchIo(block: suspend () -> Unit) = viewModelScope.launch {
         busy = true
-        try { withContext(Dispatchers.IO) { block() } } catch (e: Throwable) { fail(e) } finally { busy = false }
+        try { withContext(Dispatchers.IO) { block() } } catch (e: Throwable) { fail(e) } finally { busy = false; progress = null }
     }
 
     // ---- library -------------------------------------------------------------------------------
@@ -81,6 +98,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         session?.close(); session = null
         val (n, file) = repo.current(d.id)
         version = n
+        contentCache.clear()
         bookmarks = repo.bookmarks(d.id)
         hits = emptyList()
         try {
@@ -104,7 +122,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun closeDoc() {
         session?.close(); session = null
         openDoc = null
-        annots.clear(); hits = emptyList(); needsPassword = false
+        annots.clear(); edits.clear(); hits = emptyList(); needsPassword = false
         refresh()
     }
 
@@ -139,7 +157,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val (n, dst) = repo.nextVersion(d.id)
         PdfTools.merge(listOf(repo.current(d.id).second, other), dst)
         other.delete()
-        withContext(Dispatchers.Main) { annots.clear(); loadCurrent(); message = Msg(R.string.saved_version, listOf(n)) }
+        withContext(Dispatchers.Main) { annots.clear(); edits.clear(); loadCurrent(); message = Msg(R.string.saved_version, listOf(n)) }
     }
 
     fun runTool(op: ToolOp, input: String) = launchIo {
@@ -166,10 +184,118 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     ToolOp.Split -> Unit
                 }
                 withContext(Dispatchers.Main) {
-                    annots.clear(); bookmarks = emptySet(); repo.clearBookmarks(d.id)
+                    annots.clear(); edits.clear(); bookmarks = emptySet(); repo.clearBookmarks(d.id)
                     loadCurrent(); message = Msg(R.string.saved_version, listOf(n))
                 }
             }
+        }
+    }
+
+    // ---- content editing -----------------------------------------------------------------------
+
+    /** Editable text lines and images of a page (cached per version). */
+    suspend fun pageContent(page: Int): PageContent {
+        contentCache[version to page]?.let { return it }
+        val d = openDoc ?: return PageContent(emptyList(), emptyList())
+        val file = repo.current(d.id).second
+        val c = withContext(Dispatchers.IO) { runCatching { PdfAnalyzer.analyze(file, page) }.getOrDefault(PageContent(emptyList(), emptyList())) }
+        contentCache[version to page] = c
+        return c
+    }
+
+    fun addEdit(op: EditOp) { edits.add(op) }
+    fun discardEdits() { edits.clear() }
+
+    /** Reads a picked image and queues it, centred on ([nx], [ny]) or fitted into [replaces]. */
+    fun placeImage(uri: Uri, page: Int, nx: Float, ny: Float, replaces: ImageBox?) = launchIo {
+        val s = session ?: return@launchIo
+        val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@launchIo
+        require(bytes.size <= 25 * 1024 * 1024) { "Image is larger than 25 MB" }
+        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+        require(o.outWidth > 0 && o.outHeight > 0) { "Unsupported image" }
+        val (wPt, hPt) = s.size(page)
+        val imgAspect = o.outHeight.toFloat() / o.outWidth * wPt / hPt // height/width in normalised page units
+        val (l, t, r, b) = if (replaces != null) {
+            val bw = replaces.right - replaces.left
+            val bh = replaces.bottom - replaces.top
+            val fitW = minOf(bw, bh / imgAspect)
+            val fitH = fitW * imgAspect
+            val cx = (replaces.left + replaces.right) / 2
+            val cy = (replaces.top + replaces.bottom) / 2
+            listOf(cx - fitW / 2, cy - fitH / 2, cx + fitW / 2, cy + fitH / 2)
+        } else {
+            val w = 0.4f
+            val h = w * imgAspect
+            val left = (nx - w / 2).coerceIn(0f, 1f - w)
+            val top = (ny - h / 2).coerceIn(0f, (1f - h).coerceAtLeast(0f))
+            listOf(left, top, left + w, top + h)
+        }
+        withContext(Dispatchers.Main) { edits.add(EditOp.PlaceImage(page, l, t, r, b, bytes, replaces)) }
+    }
+
+    fun saveEdits() = launchIo {
+        val d = openDoc ?: return@launchIo
+        if (edits.isEmpty()) return@launchIo
+        val ops = edits.toList()
+        val (n, dst) = repo.nextVersion(d.id)
+        val r = PdfEditor.apply(repo.current(d.id).second, dst, ops)
+        withContext(Dispatchers.Main) {
+            edits.clear(); loadCurrent()
+            message = if (r.covered > 0) Msg(R.string.edit_saved_covered, listOf(r.applied, r.replacedInPlace, r.covered, n))
+            else Msg(R.string.edit_saved, listOf(r.applied, r.replacedInPlace, n))
+        }
+    }
+
+    suspend fun readInfo(): InfoFields? {
+        val file = openDoc?.let { repo.current(it.id).second } ?: return null
+        return withContext(Dispatchers.IO) { runCatching { PdfEditor.readInfo(file) }.getOrNull() }
+    }
+
+    fun saveInfo(fields: InfoFields) = launchIo {
+        val d = openDoc ?: return@launchIo
+        val (n, dst) = repo.nextVersion(d.id)
+        PdfEditor.writeInfo(repo.current(d.id).second, dst, fields)
+        withContext(Dispatchers.Main) { loadCurrent(); message = Msg(R.string.saved_version, listOf(n)) }
+    }
+
+    // ---- OCR and archival export ---------------------------------------------------------------
+
+    private fun report(done: Int, total: Int) { progress = done to total }
+
+    /** Adds an invisible text layer to scanned pages so the document becomes searchable. */
+    fun runOcr() = launchIo {
+        val d = openDoc ?: return@launchIo
+        val (_, src) = repo.current(d.id)
+        val (n, dst) = repo.nextVersion(d.id)
+        val pages = OcrPipeline.makeSearchable(src, dst, engine(), ::report)
+        withContext(Dispatchers.Main) {
+            if (pages == 0) {
+                message = Msg(R.string.ocr_nothing)
+            } else {
+                loadCurrent()
+                message = Msg(R.string.ocr_done, listOf(pages, n))
+            }
+        }
+    }
+
+    /** Writes a PDF/A-2b copy into the library as a new document. */
+    fun exportPdfA(keepSearchable: Boolean) = launchIo {
+        val d = openDoc ?: return@launchIo
+        val tmp = File(ctx.cacheDir, "pdfa_out.pdf")
+        try {
+            PdfaExporter.export(
+                src = repo.current(d.id).second, dst = tmp,
+                title = d.name.removeSuffix(".pdf"),
+                ocr = if (keepSearchable) engine() else null,
+                sRgbProfile = { ctx.assets.open("sRGB.icc") },
+                onProgress = ::report
+            )
+            val name = d.name.removeSuffix(".pdf") + "_PDFA.pdf"
+            repo.import(name) { out -> tmp.inputStream().use { it.copyTo(out) } }
+            withContext(Dispatchers.Main) { refresh(); message = Msg(R.string.pdfa_done, listOf(name)) }
+        } finally {
+            tmp.delete()
         }
     }
 
@@ -180,7 +306,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun restore(v: Int) {
         val d = openDoc ?: return
         val n = repo.restore(d.id, v)
-        annots.clear()
+        annots.clear(); edits.clear()
         loadCurrent()
         message = Msg(R.string.saved_version, listOf(n))
     }
@@ -235,5 +361,5 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         withContext(Dispatchers.Main) { refresh(); message = if (!sync.hasFolder()) Msg(R.string.sync_none) else Msg(R.string.sync_done, listOf(n)) }
     }
 
-    override fun onCleared() { session?.close() }
+    override fun onCleared() { session?.close(); ocr?.close() }
 }
