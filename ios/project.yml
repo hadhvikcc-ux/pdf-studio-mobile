@@ -1,0 +1,49 @@
+name: PDFStudio
+options:
+  bundleIdPrefix: com.pdfstudio
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: en
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  PDFStudio:
+    type: application
+    platform: iOS
+    sources:
+      - PDFStudio
+    info:
+      path: PDFStudio/Info.plist
+      properties:
+        CFBundleDisplayName: PDF Studio
+        UILaunchScreen: {}
+        CFBundleLocalizations: [en, es]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportsDocumentBrowser: false
+        LSSupportsOpeningDocumentsInPlace: false
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: PDF Document
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.adobe.pdf]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pdfstudio.app
+        GENERATE_INFOPLIST_FILE: NO
+  PDFStudioTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - PDFStudioTests
+    dependencies:
+      - target: PDFStudio
+schemes:
+  PDFStudio:
+    build:
+      targets:
+        PDFStudio: all
+    test:
+      targets:
+        - PDFStudioTests
