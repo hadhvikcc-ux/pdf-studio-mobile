@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -89,7 +90,7 @@ private enum class Dlg { None, Search, Navigate, Tools, Versions, Sync }
 private const val INK = 0xC62828
 private const val HIGHLIGHT = 0xFFEB3B
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ViewerScreen(vm: AppViewModel) {
     val doc = vm.openDoc ?: return
