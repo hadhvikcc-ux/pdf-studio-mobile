@@ -58,4 +58,23 @@
     <string name="ocr_nothing">Todas las páginas ya contienen texto</string>
     <string name="pdfa_done">Se creó %1$s en tu biblioteca</string>
     <string name="progress_pages">Página %1$d de %2$d</string>
+    <string name="tool_edit">Editar</string>
+    <string name="edit_hint">Toca un texto o imagen para editarlo, o un espacio vacío para añadir</string>
+    <string name="edit_text">Editar texto</string>
+    <string name="edit_add_text">Añadir texto</string>
+    <string name="edit_text_hint">Texto</string>
+    <string name="edit_font_size">Tamaño de fuente (pt)</string>
+    <string name="edit_image">Imagen</string>
+    <string name="edit_image_delete">Eliminar imagen</string>
+    <string name="edit_image_replace">Reemplazar imagen…</string>
+    <string name="edit_add_image">Añadir imagen en su lugar…</string>
+    <string name="edit_save">Guardar ediciones (%1$d)</string>
+    <string name="edit_discard">Descartar</string>
+    <string name="edit_saved">%1$d edición(es) aplicadas, %2$d reemplazadas en el texto. Guardado como versión %3$d</string>
+    <string name="edit_saved_covered">%1$d edición(es): %2$d reemplazadas en el texto, %3$d cubiertas. Guardado como versión %4$d. El texto cubierto está oculto pero sigue en el archivo.</string>
+    <string name="edit_properties">Editar propiedades del documento</string>
+    <string name="meta_title">Título</string>
+    <string name="meta_author">Autor</string>
+    <string name="meta_subject">Asunto</string>
+    <string name="meta_keywords">Palabras clave</string>
 </resources>

@@ -145,7 +145,7 @@ object PdfTools {
                                 while (i + 1 < a.pts.size) { cs.lineTo(px(a.pts[i]), py(a.pts[i + 1])); i += 2 }
                                 cs.stroke()
                             }
-                            Tool.None -> Unit
+                            Tool.None, Tool.Edit -> Unit
                         }
                         cs.restoreGraphicsState()
                     }

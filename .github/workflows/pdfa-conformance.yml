@@ -34,7 +34,7 @@ jobs:
           working-directory: android
           script: |
             ./gradlew --no-daemon :app:connectedDebugAndroidTest
-            adb pull /sdcard/Android/data/com.pdfstudio.app/files/pdfa-out.pdf ../pdfa-out.pdf
+            adb pull /data/local/tmp/pdfa-out.pdf ../pdfa-out.pdf
       - name: Validate with veraPDF (PDF/A-2b)
         run: docker run --rm -v "$PWD":/data verapdf/cli --flavour 2b --format text /data/pdfa-out.pdf
       - uses: actions/upload-artifact@v4

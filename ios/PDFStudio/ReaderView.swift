@@ -1,18 +1,31 @@
 import SwiftUI
 import PDFKit
 import UniformTypeIdentifiers
+import PhotosUI
 
-/// Owns the PDFView so SwiftUI can drive it (navigation, selection, annotations).
-final class PDFController: ObservableObject {
+/// Owns the PDFView so SwiftUI can drive it (navigation, selection, annotations, taps).
+final class PDFController: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     let view = PDFView()
-    init() {
+    /// Called with the tap location in the PDFView's coordinate space.
+    var onTap: ((CGPoint) -> Void)?
+
+    override init() {
+        super.init()
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
         view.maxScaleFactor = 6
         view.minScaleFactor = view.scaleFactorForSizeToFit
         view.backgroundColor = .systemBackground
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+        tap.delegate = self
+        tap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap)
     }
+
+    @objc private func tapped(_ g: UITapGestureRecognizer) { onTap?(g.location(in: view)) }
+
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
     var pageIndex: Int {
         guard let doc = view.document, let p = view.currentPage else { return 0 }
@@ -31,7 +44,7 @@ struct ReaderView: View {
     @EnvironmentObject var store: DocStore
     @StateObject private var pdf = PDFController()
 
-    private enum Sheet: Identifiable { case search, pages, tools, versions, sync, share([Any])
+    private enum Sheet: Identifiable { case search, pages, tools, versions, sync, info, share([Any])
         var id: String {
             switch self {
             case .search: return "search"
@@ -39,6 +52,7 @@ struct ReaderView: View {
             case .tools: return "tools"
             case .versions: return "versions"
             case .sync: return "sync"
+            case .info: return "info"
             case .share: return "share"
             }
         }
@@ -60,6 +74,12 @@ struct ReaderView: View {
     @State private var version = 1
     @State private var dirty = false
     @State private var busy = false
+    @State private var editing = false
+    @State private var textTarget: TextTarget?
+    @State private var pickingPhoto = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var imageSpot: (page: Int, point: CGPoint)?
+    @State private var infoDraft = EditTools.Info()
 
     var body: some View {
         ZStack {
@@ -68,6 +88,10 @@ struct ReaderView: View {
                 .ignoresSafeArea(edges: .bottom)
                 .accessibilityLabel(info.name)
             if drawing { inkOverlay }
+            if editing {
+                Text("edit_hint").font(.footnote).padding(8).background(.regularMaterial, in: Capsule())
+                    .frame(maxHeight: .infinity, alignment: .top).padding(.top, 8).allowsHitTesting(false)
+            }
             if busy { ProgressView().controlSize(.large).padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) }
         }
         .navigationTitle(info.name)
@@ -80,6 +104,7 @@ struct ReaderView: View {
                     Button(LocalizedStringKey(bookmarks.contains(pdf.pageIndex) ? "remove_bookmark" : "add_bookmark")) { toggleBookmark() }
                     Button("thumbnails_bookmarks") { sheet = .pages }
                     Button("tools") { sheet = .tools }
+                    Button("edit_properties") { infoDraft = pdf.view.document.map(EditTools.readInfo) ?? EditTools.Info(); sheet = .info }
                     Button("versions") { sheet = .versions }
                     Button("sync") { sheet = .sync }
                     Toggle("night_mode", isOn: $night)
@@ -91,17 +116,33 @@ struct ReaderView: View {
                 Button("highlight") { highlightSelection() }
                 Button(LocalizedStringKey(drawing ? "tool_none" : "tool_ink")) { drawing.toggle() }
                 Button("add_note") { addNote() }
+                Button(LocalizedStringKey(editing ? "edit_done" : "edit")) { editing.toggle(); if editing { drawing = false } }
                 Spacer()
                 if dirty { Button("save_annotations") { saveAnnotations() } }
             }
         }
-        .onAppear(perform: load)
+        .onAppear {
+            load()
+            pdf.onTap = { handleTap($0) }
+        }
         .onChange(of: paged) { on in
             pdf.view.displayMode = on ? .singlePage : .singlePageContinuous
             pdf.view.usePageViewController(on)
         }
         .sheet(item: $sheet) { sheetContent($0) }
         .sheet(item: $input) { op in inputSheet(op) }
+        .sheet(item: $textTarget) { t in textSheet(t) }
+        .photosPicker(isPresented: $pickingPhoto, selection: $photoItem, matching: .images)
+        .onChange(of: photoItem) { item in
+            guard let item else { return }
+            Task {
+                let data = try? await item.loadTransferable(type: Data.self)
+                await MainActor.run {
+                    photoItem = nil
+                    if let data, let image = UIImage(data: data) { insertImage(image) }
+                }
+            }
+        }
         .fileImporter(isPresented: $mergePicking, allowedContentTypes: [.pdf]) { r in
             if case .success(let url) = r { merge(url) }
         }
@@ -276,6 +317,72 @@ struct ReaderView: View {
         } catch { message = error.localizedDescription }
     }
 
+    // MARK: Content editing
+
+    private func handleTap(_ viewPoint: CGPoint) {
+        guard editing, !drawing, let page = pdf.view.page(for: viewPoint, nearest: false) else { return }
+        let pt = pdf.view.convert(viewPoint, to: page)
+        if let annot = page.annotation(at: pt), annot.type?.contains("FreeText") == true {
+            textTarget = TextTarget(page: page, kind: .annotation(annot), initial: annot.contents ?? "")
+        } else if let line = page.selectionForLine(at: pt), let text = line.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            textTarget = TextTarget(page: page, kind: .line(line.bounds(for: page)), initial: text)
+        } else {
+            textTarget = TextTarget(page: page, kind: .new(pt), initial: "")
+        }
+    }
+
+    private func applyText(_ t: TextTarget, _ text: String, size: CGFloat) {
+        switch t.kind {
+        case .annotation(let a): a.contents = text
+        case .line(let bounds):
+            EditTools.replaceLine(on: t.page, bounds: bounds, with: text)
+            message = String(localized: "edit_covered_note")
+        case .new(let point): EditTools.addText(text, at: point, size: size, on: t.page)
+        }
+        dirty = true
+        // PDFView caches rendering; nudge it to redraw the annotation.
+        pdf.view.setNeedsDisplay()
+    }
+
+    private func insertImage(_ image: UIImage) {
+        guard let spot = imageSpot, let doc = pdf.view.document else { return }
+        let data = EditTools.insertImage(image, in: doc, pageIndex: spot.page, centre: spot.point)
+        let next = store.nextVersion(info.id)
+        do {
+            try data.write(to: next.url)
+            message = String(format: String(localized: "saved_version"), next.number)
+            load()
+        } catch { message = error.localizedDescription }
+        imageSpot = nil
+    }
+
+    private func saveInfo() {
+        guard let doc = pdf.view.document else { return }
+        EditTools.writeInfo(infoDraft, to: doc)
+        let next = store.nextVersion(info.id)
+        sheet = nil
+        if doc.write(to: next.url) {
+            message = String(format: String(localized: "saved_version"), next.number)
+            load()
+        } else { message = String(localized: "error_open") }
+    }
+
+    private func textSheet(_ t: TextTarget) -> some View {
+        TextEditSheet(
+            target: t.kind, initial: t.initial,
+            onApply: { text, size in textTarget = nil; applyText(t, text, size: size) },
+            onAddImage: {
+                if case .new(let p) = t.kind, let doc = pdf.view.document {
+                    imageSpot = (doc.index(for: t.page), p)
+                    textTarget = nil
+                    pickingPhoto = true
+                }
+            },
+            onCancel: { textTarget = nil }
+        )
+        .presentationDetents([.medium])
+    }
+
     // MARK: Sheets
 
     @ViewBuilder private func sheetContent(_ s: Sheet) -> some View {
@@ -323,6 +430,20 @@ struct ReaderView: View {
                     }
                 }
                 .navigationTitle("sync")
+            }
+        case .info:
+            NavigationStack {
+                Form {
+                    TextField("meta_title", text: $infoDraft.title)
+                    TextField("meta_author", text: $infoDraft.author)
+                    TextField("meta_subject", text: $infoDraft.subject)
+                    TextField("meta_keywords", text: $infoDraft.keywords)
+                }
+                .navigationTitle("edit_properties")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("cancel") { sheet = nil } }
+                    ToolbarItem(placement: .confirmationAction) { Button("apply") { saveInfo() } }
+                }
             }
         case .share(let items): ActivityView(items: items)
         }
@@ -437,5 +558,53 @@ private struct PagesSheet: View {
     private func go(_ i: Int) {
         if let p = pdf.view.document?.page(at: i) { pdf.view.go(to: p) }
         close()
+    }
+}
+
+/// What the user tapped in Edit mode.
+private enum TextKind { case annotation(PDFAnnotation), line(CGRect), new(CGPoint) }
+
+private struct TextTarget: Identifiable {
+    let id = UUID()
+    let page: PDFPage
+    let kind: TextKind
+    let initial: String
+}
+
+private struct TextEditSheet: View {
+    let target: TextKind
+    let initial: String
+    let onApply: (String, CGFloat) -> Void
+    let onAddImage: () -> Void
+    let onCancel: () -> Void
+    @State private var text = ""
+    @State private var size: Double = 14
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("edit_text_hint", text: $text, axis: .vertical)
+                if case .new = target {
+                    Stepper(value: $size, in: 6...72) { Text("edit_font_size") + Text(": \(Int(size))") }
+                    Button("edit_add_image") { onAddImage() }
+                }
+                if case .line = target {
+                    Text("edit_covered_note").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle(LocalizedStringKey(title))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("cancel", action: onCancel) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("apply") { onApply(text, CGFloat(size)) }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .onAppear { text = initial }
+    }
+
+    private var title: String {
+        if case .new = target { return "edit_add_text" }
+        return "edit_text"
     }
 }

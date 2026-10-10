@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.pdf.PdfDocument
+import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.pdfstudio.app.pdf.OcrEngine
@@ -44,6 +45,16 @@ class PdfaConformanceTest {
         return f
     }
 
+    /**
+     * Gradle uninstalls the app when the tests finish, taking its files with it. Copy the export somewhere the
+     * adb shell can read it so the workflow can pull it afterwards and validate it with veraPDF.
+     */
+    private fun publishForCi(f: File) {
+        val pfd = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("cp ${f.absolutePath} /data/local/tmp/pdfa-out.pdf")
+        ParcelFileDescriptor.AutoCloseInputStream(pfd).use { it.readBytes() } // wait for the command to finish
+    }
+
     private fun text(f: File) = PDDocument.load(f).use { PDFTextStripper().getText(it) }
 
     @Test fun ocrMakesScanSearchable() = runBlocking {
@@ -68,5 +79,6 @@ class PdfaConformanceTest {
         }
         assertTrue(dst.length() > 0)
         assertTrue(text(dst), text(dst).contains("Hello", ignoreCase = true))
+        publishForCi(dst)
     }
 }

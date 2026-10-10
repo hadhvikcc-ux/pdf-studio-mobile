@@ -58,4 +58,23 @@
     <string name="ocr_nothing">All pages already contain text</string>
     <string name="pdfa_done">Created %1$s in your library</string>
     <string name="progress_pages">Page %1$d of %2$d</string>
+    <string name="tool_edit">Edit</string>
+    <string name="edit_hint">Tap text or an image to edit it, or tap empty space to add</string>
+    <string name="edit_text">Edit text</string>
+    <string name="edit_add_text">Add text</string>
+    <string name="edit_text_hint">Text</string>
+    <string name="edit_font_size">Font size (pt)</string>
+    <string name="edit_image">Image</string>
+    <string name="edit_image_delete">Delete image</string>
+    <string name="edit_image_replace">Replace image…</string>
+    <string name="edit_add_image">Add image instead…</string>
+    <string name="edit_save">Save edits (%1$d)</string>
+    <string name="edit_discard">Discard</string>
+    <string name="edit_saved">Applied %1$d edit(s), %2$d replaced in place. Saved as version %3$d</string>
+    <string name="edit_saved_covered">Applied %1$d edit(s): %2$d replaced in place, %3$d covered. Saved as version %4$d. Covered text is hidden but still in the file.</string>
+    <string name="edit_properties">Edit document properties</string>
+    <string name="meta_title">Title</string>
+    <string name="meta_author">Author</string>
+    <string name="meta_subject">Subject</string>
+    <string name="meta_keywords">Keywords</string>
 </resources>

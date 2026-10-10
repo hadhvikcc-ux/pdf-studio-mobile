@@ -51,3 +51,17 @@
 "ocr" = "Hacer buscable (OCR)";
 "ocr_done" = "Texto reconocido en %d página(s). Guardado como versión %d";
 "ocr_nothing" = "Todas las páginas ya contienen texto";
+"edit" = "Editar";
+"edit_done" = "Terminar edición";
+"edit_hint" = "Toca un texto para editarlo, o un espacio vacío para añadir texto o una imagen";
+"edit_text" = "Editar texto";
+"edit_add_text" = "Añadir texto";
+"edit_text_hint" = "Texto";
+"edit_font_size" = "Tamaño de fuente";
+"edit_add_image" = "Añadir una imagen aquí…";
+"edit_properties" = "Propiedades del documento";
+"edit_covered_note" = "El texto original queda oculto bajo un cuadro blanco, pero sigue en el archivo.";
+"meta_title" = "Título";
+"meta_author" = "Autor";
+"meta_subject" = "Asunto";
+"meta_keywords" = "Palabras clave (separadas por comas)";
