@@ -14,7 +14,10 @@ import androidx.lifecycle.viewModelScope
 import com.pdfstudio.app.data.Annot
 import com.pdfstudio.app.data.DocInfo
 import com.pdfstudio.app.data.DocRepo
+import com.pdfstudio.app.pdf.OcrEngine
+import com.pdfstudio.app.pdf.OcrPipeline
 import com.pdfstudio.app.pdf.PdfSession
+import com.pdfstudio.app.pdf.PdfaExporter
 import com.pdfstudio.app.pdf.PdfTools
 import com.pdfstudio.app.pdf.RangeParser
 import com.pdfstudio.app.pdf.SearchHit
@@ -43,7 +46,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var message by mutableStateOf<Msg?>(null)
     var needsPassword by mutableStateOf(false); private set
     var busy by mutableStateOf(false); private set
+    /** (done, total) while OCR or PDF/A export is running. */
+    var progress by mutableStateOf<Pair<Int, Int>?>(null); private set
     val annots = mutableStateListOf<Annot>()
+
+    private var ocr: OcrEngine? = null
+    private fun engine(): OcrEngine = ocr ?: OcrEngine().also { ocr = it }
 
     init { PdfTools.init(app) }
 
@@ -55,7 +63,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun launchIo(block: suspend () -> Unit) = viewModelScope.launch {
         busy = true
-        try { withContext(Dispatchers.IO) { block() } } catch (e: Throwable) { fail(e) } finally { busy = false }
+        try { withContext(Dispatchers.IO) { block() } } catch (e: Throwable) { fail(e) } finally { busy = false; progress = null }
     }
 
     // ---- library -------------------------------------------------------------------------------
@@ -173,6 +181,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- OCR and archival export ---------------------------------------------------------------
+
+    private fun report(done: Int, total: Int) { progress = done to total }
+
+    /** Adds an invisible text layer to scanned pages so the document becomes searchable. */
+    fun runOcr() = launchIo {
+        val d = openDoc ?: return@launchIo
+        val (_, src) = repo.current(d.id)
+        val (n, dst) = repo.nextVersion(d.id)
+        val pages = OcrPipeline.makeSearchable(src, dst, engine(), ::report)
+        withContext(Dispatchers.Main) {
+            if (pages == 0) {
+                message = Msg(R.string.ocr_nothing)
+            } else {
+                annots.clear(); loadCurrent()
+                message = Msg(R.string.ocr_done, listOf(pages, n))
+            }
+        }
+    }
+
+    /** Writes a PDF/A-2b copy into the library as a new document. */
+    fun exportPdfA(keepSearchable: Boolean) = launchIo {
+        val d = openDoc ?: return@launchIo
+        val tmp = File(ctx.cacheDir, "pdfa_out.pdf")
+        try {
+            PdfaExporter.export(
+                src = repo.current(d.id).second, dst = tmp,
+                title = d.name.removeSuffix(".pdf"),
+                ocr = if (keepSearchable) engine() else null,
+                sRgbProfile = { ctx.assets.open("sRGB.icc") },
+                onProgress = ::report
+            )
+            val name = d.name.removeSuffix(".pdf") + "_PDFA.pdf"
+            repo.import(name) { out -> tmp.inputStream().use { it.copyTo(out) } }
+            withContext(Dispatchers.Main) { refresh(); message = Msg(R.string.pdfa_done, listOf(name)) }
+        } finally {
+            tmp.delete()
+        }
+    }
+
     // ---- versions ------------------------------------------------------------------------------
 
     fun versionList() = openDoc?.let { repo.versions(it.id).map { v -> v.first } } ?: emptyList()
@@ -235,5 +283,5 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         withContext(Dispatchers.Main) { refresh(); message = if (!sync.hasFolder()) Msg(R.string.sync_none) else Msg(R.string.sync_done, listOf(n)) }
     }
 
-    override fun onCleared() { session?.close() }
+    override fun onCleared() { session?.close(); ocr?.close() }
 }

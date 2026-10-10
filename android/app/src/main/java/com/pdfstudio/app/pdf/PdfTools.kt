@@ -83,6 +83,21 @@ object PdfTools {
         }
     }
 
+    /** Adds invisible OCR text. [recognised] maps a 0-based page to (lines, bitmapWidth, bitmapHeight). */
+    fun addTextLayer(src: File, dst: File, recognised: Map<Int, Triple<List<OcrLine>, Int, Int>>) {
+        PDDocument.load(src).useDoc { doc ->
+            val font = TextLayer.loadFont(doc, requireEmbedded = false)
+            for ((pageIndex, r) in recognised) {
+                if (r.first.isEmpty()) continue
+                val page = doc.getPage(pageIndex)
+                PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true).use { cs ->
+                    TextLayer.draw(cs, font, r.first, r.second, r.third, page.cropBox)
+                }
+            }
+            doc.save(dst)
+        }
+    }
+
     fun protect(src: File, password: String, dst: File) {
         PDDocument.load(src).useDoc { doc ->
             val policy = StandardProtectionPolicy(password, password, AccessPermission())

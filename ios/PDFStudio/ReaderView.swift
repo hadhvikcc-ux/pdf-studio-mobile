@@ -59,6 +59,7 @@ struct ReaderView: View {
     @State private var message: String?
     @State private var version = 1
     @State private var dirty = false
+    @State private var busy = false
 
     var body: some View {
         ZStack {
@@ -67,6 +68,7 @@ struct ReaderView: View {
                 .ignoresSafeArea(edges: .bottom)
                 .accessibilityLabel(info.name)
             if drawing { inkOverlay }
+            if busy { ProgressView().controlSize(.large).padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) }
         }
         .navigationTitle(info.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -215,6 +217,29 @@ struct ReaderView: View {
         } else { message = String(localized: "error_open") }
     }
 
+    /// Adds an invisible text layer to scanned pages. Runs off the main thread; Vision is slow on big scans.
+    private func runOCR() {
+        guard let doc = copyDocument() else { return }
+        busy = true
+        Task.detached(priority: .userInitiated) {
+            let outcome = Result { try OCR.makeSearchable(doc) { _, _ in } }
+            await MainActor.run {
+                busy = false
+                switch outcome {
+                case .failure(let e): message = e.localizedDescription
+                case .success(nil): message = String(localized: "ocr_nothing")
+                case .success(let r?):
+                    let next = store.nextVersion(info.id)
+                    do {
+                        try r.data.write(to: next.url)
+                        message = String(format: String(localized: "ocr_done"), r.pages, next.number)
+                        load()
+                    } catch { message = error.localizedDescription }
+                }
+            }
+        }
+    }
+
     private func copyDocument() -> PDFDocument? { PDFDocument(url: store.current(info.id).url) }
 
     private func merge(_ url: URL) {
@@ -278,6 +303,7 @@ struct ReaderView: View {
                     Button("split") { sheet = nil; input = .split }
                     Button("reorder") { sheet = nil; input = .reorder }
                     Button("protect") { sheet = nil; input = .protect }
+                    Button("ocr") { sheet = nil; runOCR() }
                     Button("share_pdf") { sheet = .share([store.current(info.id).url]) }
                     Button("share_png") { sharePagePNG() }
                 }

@@ -52,4 +52,10 @@
     <string name="night_mode">Lectura nocturna</string>
     <string name="saved_version">Guardado como versión %1$d</string>
     <string name="split_saved">Se crearon %1$d documentos en tu biblioteca</string>
+    <string name="ocr">Hacer buscable (OCR)</string>
+    <string name="export_pdfa">Exportar como PDF/A-2b (archivo)</string>
+    <string name="ocr_done">Texto reconocido en %1$d página(s). Guardado como versión %2$d</string>
+    <string name="ocr_nothing">Todas las páginas ya contienen texto</string>
+    <string name="pdfa_done">Se creó %1$s en tu biblioteca</string>
+    <string name="progress_pages">Página %1$d de %2$d</string>
 </resources>

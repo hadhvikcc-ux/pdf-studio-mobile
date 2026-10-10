@@ -48,3 +48,6 @@
 "sync_pull" = "Download PDFs from folder";
 "sync_none" = "No sync folder selected";
 "sync_done" = "Sync complete: %d file(s)";
+"ocr" = "Make searchable (OCR)";
+"ocr_done" = "Text recognised on %d page(s). Saved as version %d";
+"ocr_nothing" = "All pages already contain text";

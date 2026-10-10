@@ -48,3 +48,6 @@
 "sync_pull" = "Descargar PDFs de la carpeta";
 "sync_none" = "Ninguna carpeta seleccionada";
 "sync_done" = "Sincronización completa: %d archivo(s)";
+"ocr" = "Hacer buscable (OCR)";
+"ocr_done" = "Texto reconocido en %d página(s). Guardado como versión %d";
+"ocr_nothing" = "Todas las páginas ya contienen texto";

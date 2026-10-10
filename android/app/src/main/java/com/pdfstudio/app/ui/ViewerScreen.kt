@@ -185,7 +185,12 @@ fun ViewerScreen(vm: AppViewModel) {
                 offX = ((offX - baseWpx / 2) * ratio + baseWpx / 2 + pan.x).coerceIn(-(baseWpx * (scale - 1f)), 0f)
             }
             if (vm.busy || (session == null && !vm.needsPassword)) {
-                CircularProgressIndicator(Modifier.align(Alignment.Center))
+                Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    vm.progress?.let { (done, total) ->
+                        Text(stringResource(R.string.progress_pages, minOf(done + 1, total), total), Modifier.padding(top = 8.dp))
+                    }
+                }
             }
             if (session != null) {
                 // Re-render only at coarse zoom steps so pinching stays smooth.
@@ -233,6 +238,8 @@ fun ViewerScreen(vm: AppViewModel) {
                     TextButton(onClick = { dlg = Dlg.None; input = ToolOp.Reorder }) { Text(stringResource(R.string.reorder)) }
                     TextButton(onClick = { dlg = Dlg.None; input = ToolOp.Watermark }) { Text(stringResource(R.string.watermark)) }
                     TextButton(onClick = { dlg = Dlg.None; input = ToolOp.Protect }) { Text(stringResource(R.string.protect)) }
+                    TextButton(onClick = { dlg = Dlg.None; vm.runOcr() }) { Text(stringResource(R.string.ocr)) }
+                    TextButton(onClick = { dlg = Dlg.None; vm.exportPdfA(true) }) { Text(stringResource(R.string.export_pdfa)) }
                     TextButton(onClick = { dlg = Dlg.None; vm.sharePdf() }) { Text(stringResource(R.string.share_pdf)) }
                     TextButton(onClick = { dlg = Dlg.None; vm.sharePagePng(page) }) { Text(stringResource(R.string.share_png)) }
                 }
