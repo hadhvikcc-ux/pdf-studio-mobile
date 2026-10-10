@@ -6,7 +6,6 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.pdf.PdfDocument
-import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.pdfstudio.app.pdf.OcrEngine
@@ -23,8 +22,9 @@ import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * Runs on an emulator in CI. The exported file is left in the app's external files dir so the workflow
- * can pull it and validate it with veraPDF.
+ * Runs on an emulator in CI. The exported file is left in the app's private files dir so the workflow can read it
+ * (`run-as`, debug build) and validate it with veraPDF. The app must stay installed, so the workflow drives the tests
+ * with `am instrument` instead of connectedAndroidTest, which uninstalls the app afterwards.
  */
 @RunWith(AndroidJUnit4::class)
 class PdfaConformanceTest {
@@ -45,16 +45,6 @@ class PdfaConformanceTest {
         return f
     }
 
-    /**
-     * Gradle uninstalls the app when the tests finish, taking its files with it. Copy the export somewhere the
-     * adb shell can read it so the workflow can pull it afterwards and validate it with veraPDF.
-     */
-    private fun publishForCi(f: File) {
-        val pfd = InstrumentationRegistry.getInstrumentation().uiAutomation
-            .executeShellCommand("cp ${f.absolutePath} /data/local/tmp/pdfa-out.pdf")
-        ParcelFileDescriptor.AutoCloseInputStream(pfd).use { it.readBytes() } // wait for the command to finish
-    }
-
     private fun text(f: File) = PDDocument.load(f).use { PDFTextStripper().getText(it) }
 
     @Test fun ocrMakesScanSearchable() = runBlocking {
@@ -73,12 +63,11 @@ class PdfaConformanceTest {
     @Test fun exportsPdfA() = runBlocking {
         PdfTools.init(ctx)
         val src = scannedPdf()
-        val dst = File(ctx.getExternalFilesDir(null), "pdfa-out.pdf")
+        val dst = File(ctx.filesDir, "pdfa-out.pdf") // the workflow reads this with `run-as`
         OcrEngine().use { engine ->
             PdfaExporter.export(src, dst, "Conformance test", engine, { ctx.assets.open("sRGB.icc") }) { _, _ -> }
         }
         assertTrue(dst.length() > 0)
         assertTrue(text(dst), text(dst).contains("Hello", ignoreCase = true))
-        publishForCi(dst)
     }
 }

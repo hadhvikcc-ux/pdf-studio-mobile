@@ -33,8 +33,10 @@ jobs:
           target: google_apis
           working-directory: android
           script: |
-            ./gradlew --no-daemon :app:connectedDebugAndroidTest
-            adb pull /data/local/tmp/pdfa-out.pdf ../pdfa-out.pdf
+            ./gradlew --no-daemon :app:installDebug :app:installDebugAndroidTest
+            adb shell am instrument -w com.pdfstudio.app.test/androidx.test.runner.AndroidJUnitRunner | tee ../instrument.txt
+            grep -q "^OK (" ../instrument.txt
+            adb exec-out run-as com.pdfstudio.app cat files/pdfa-out.pdf > ../pdfa-out.pdf
       - name: Validate with veraPDF (PDF/A-2b)
         run: docker run --rm -v "$PWD":/data verapdf/cli --flavour 2b --format text /data/pdfa-out.pdf
       - uses: actions/upload-artifact@v4
