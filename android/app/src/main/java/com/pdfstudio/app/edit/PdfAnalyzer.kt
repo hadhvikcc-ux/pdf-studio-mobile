@@ -2,6 +2,12 @@ package com.pdfstudio.app.edit
 
 import com.tom_roush.pdfbox.contentstream.PDFStreamEngine
 import com.tom_roush.pdfbox.contentstream.operator.Operator
+import com.tom_roush.pdfbox.contentstream.operator.color.SetNonStrokingColor
+import com.tom_roush.pdfbox.contentstream.operator.color.SetNonStrokingColorN
+import com.tom_roush.pdfbox.contentstream.operator.color.SetNonStrokingColorSpace
+import com.tom_roush.pdfbox.contentstream.operator.color.SetNonStrokingDeviceCMYKColor
+import com.tom_roush.pdfbox.contentstream.operator.color.SetNonStrokingDeviceGrayColor
+import com.tom_roush.pdfbox.contentstream.operator.color.SetNonStrokingDeviceRGBColor
 import com.tom_roush.pdfbox.contentstream.operator.state.Concatenate
 import com.tom_roush.pdfbox.contentstream.operator.state.Restore
 import com.tom_roush.pdfbox.contentstream.operator.state.Save
@@ -19,6 +25,7 @@ import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotation
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
 import java.io.File
+import java.io.IOException
 import java.util.IdentityHashMap
 
 /** Finds the editable text lines and images on a page. Blocking; call from Dispatchers.IO. */
@@ -38,6 +45,8 @@ object PdfAnalyzer {
         return parser.tokens.count { it is Operator && it.name in PdfEditor.SHOW_OPERATORS }
     }
 
+    private val COLOR_OPERATORS = setOf("sc", "scn", "cs", "g", "rg", "k")
+
     private class Word(val text: String, val positions: List<TextPosition>)
 
     /**
@@ -55,6 +64,22 @@ object PdfAnalyzer {
         private val colorOf = IdentityHashMap<TextPosition, Int>()
         private val line = ArrayList<Word>()
         private val glyphsPerOp = HashMap<Int, Int>()
+
+        init {
+            // Text extraction ignores colour operators, so without these every run would read as black.
+            addOperator(SetNonStrokingColor())
+            addOperator(SetNonStrokingColorN())
+            addOperator(SetNonStrokingColorSpace())
+            addOperator(SetNonStrokingDeviceCMYKColor())
+            addOperator(SetNonStrokingDeviceGrayColor())
+            addOperator(SetNonStrokingDeviceRGBColor())
+        }
+
+        // An unsupported colour space must not abort text detection; the run just keeps the previous colour.
+        override fun operatorException(operator: Operator, operands: MutableList<COSBase>, exception: IOException) {
+            if (operator.name in COLOR_OPERATORS) return
+            super.operatorException(operator, operands, exception)
+        }
 
         override fun showTextString(string: ByteArray) {
             if (formDepth == 0 && !inAnnotations) { opIndex++; pageOps = opIndex + 1 }
