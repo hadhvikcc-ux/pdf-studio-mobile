@@ -323,25 +323,33 @@ struct ReaderView: View {
         guard editing, !drawing, let page = pdf.view.page(for: viewPoint, nearest: false) else { return }
         let pt = pdf.view.convert(viewPoint, to: page)
         if let annot = page.annotation(at: pt), annot.type?.contains("FreeText") == true {
-            textTarget = TextTarget(page: page, kind: .annotation(annot), initial: annot.contents ?? "")
+            var style = EditTools.TextStyle.infer(fontName: annot.font?.fontName ?? "", size: annot.font?.pointSize ?? 14, color: annot.fontColor ?? .black)
+            if style.size < 1 { style.size = 14 }
+            textTarget = TextTarget(page: page, kind: .annotation(annot), initial: annot.contents ?? "", style: style)
         } else if let line = page.selectionForLine(at: pt), let text = line.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-            textTarget = TextTarget(page: page, kind: .line(line.bounds(for: page)), initial: text)
+            let bounds = line.bounds(for: page)
+            // Start from the document's own font so the replacement looks like the original.
+            textTarget = TextTarget(page: page, kind: .line(bounds), initial: text, style: EditTools.style(of: line, fallbackSize: max(6, bounds.height * 0.8)))
         } else {
-            textTarget = TextTarget(page: page, kind: .new(pt), initial: "")
+            textTarget = TextTarget(page: page, kind: .new(pt), initial: "", style: EditTools.TextStyle())
         }
     }
 
-    private func applyText(_ t: TextTarget, _ text: String, size: CGFloat) {
+    private func applyText(_ t: TextTarget, _ text: String, style: EditTools.TextStyle) {
         switch t.kind {
-        case .annotation(let a): a.contents = text
+        case .annotation(let a):
+            a.contents = text
+            a.font = style.uiFont
+            a.fontColor = style.color
         case .line(let bounds):
-            EditTools.replaceLine(on: t.page, bounds: bounds, with: text)
-            message = String(localized: "edit_covered_note")
-        case .new(let point): EditTools.addText(text, at: point, size: size, on: t.page)
+            EditTools.replaceLine(on: t.page, bounds: bounds, with: text, style: style)
+        case .new(let point):
+            EditTools.addText(text, at: point, style: style, on: t.page)
         }
         dirty = true
-        // PDFView caches rendering; nudge it to redraw the annotation.
-        pdf.view.setNeedsDisplay()
+        // Save straight away so the user sees the result in a new version instead of hunting for a save button.
+        saveAnnotations()
+        if case .line = t.kind { message = String(localized: "edit_covered_note") }
     }
 
     private func insertImage(_ image: UIImage) {
@@ -369,8 +377,8 @@ struct ReaderView: View {
 
     private func textSheet(_ t: TextTarget) -> some View {
         TextEditSheet(
-            target: t.kind, initial: t.initial,
-            onApply: { text, size in textTarget = nil; applyText(t, text, size: size) },
+            target: t.kind, initial: t.initial, initialStyle: t.style,
+            onApply: { text, style in textTarget = nil; applyText(t, text, style: style) },
             onAddImage: {
                 if case .new(let p) = t.kind, let doc = pdf.view.document {
                     imageSpot = (doc.index(for: t.page), p)
@@ -380,7 +388,7 @@ struct ReaderView: View {
             },
             onCancel: { textTarget = nil }
         )
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     // MARK: Sheets
@@ -569,23 +577,36 @@ private struct TextTarget: Identifiable {
     let page: PDFPage
     let kind: TextKind
     let initial: String
+    let style: EditTools.TextStyle
 }
 
 private struct TextEditSheet: View {
     let target: TextKind
     let initial: String
-    let onApply: (String, CGFloat) -> Void
+    let initialStyle: EditTools.TextStyle
+    let onApply: (String, EditTools.TextStyle) -> Void
     let onAddImage: () -> Void
     let onCancel: () -> Void
     @State private var text = ""
-    @State private var size: Double = 14
+    @State private var style = EditTools.TextStyle()
 
     var body: some View {
         NavigationStack {
             Form {
                 TextField("edit_text_hint", text: $text, axis: .vertical)
+                    .font(Font(style.uiFont as CTFont))
+                Section {
+                    Picker("edit_font", selection: $style.family) {
+                        Text("font_sans").tag(EditTools.TextStyle.Family.sans)
+                        Text("font_serif").tag(EditTools.TextStyle.Family.serif)
+                        Text("font_mono").tag(EditTools.TextStyle.Family.mono)
+                    }
+                    .pickerStyle(.segmented)
+                    Toggle("font_bold", isOn: $style.bold)
+                    Toggle("font_italic", isOn: $style.italic)
+                    Stepper(value: $style.size, in: 6...96) { Text("edit_font_size") + Text(": \(Int(style.size))") }
+                }
                 if case .new = target {
-                    Stepper(value: $size, in: 6...72) { Text("edit_font_size") + Text(": \(Int(size))") }
                     Button("edit_add_image") { onAddImage() }
                 }
                 if case .line = target {
@@ -596,11 +617,14 @@ private struct TextEditSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("cancel", action: onCancel) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("apply") { onApply(text, CGFloat(size)) }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("apply") { onApply(text, style) }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
-        .onAppear { text = initial }
+        .onAppear {
+            text = initial
+            style = initialStyle
+        }
     }
 
     private var title: String {

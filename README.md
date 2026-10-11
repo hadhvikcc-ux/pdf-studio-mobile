@@ -67,13 +67,23 @@ structured so a server implementation can replace them.
 Tap **Edit** in the bottom bar, then tap a line of text, an image, or empty space. Changes are queued (Android
 shows them as overlays) and saved together as one new version, so every edit can be undone from version history.
 
-* **Android text replacement** tries a true in-place edit of the page's content stream first. That removes the old
-  text from the file, but only works when exactly one text operator on the page matches and the font can encode the
-  new characters (subset fonts often cannot). Otherwise it **covers the old text with a white box and writes the new
-  text on top; the old text stays in the file** and can still be selected or extracted. The save message tells you
-  how many edits fell into each case.
-* **iOS** can only do the cover-and-overwrite variant, because PDFKit does not expose page content. Added text
-  is a standard FreeText annotation. Inserting an image rebuilds the file and flattens existing annotations.
+* **Fonts:** the dialog starts from the font family, weight, slant, size and colour detected in the document
+  (Sans / Serif / Mono, bold, italic) and lets you change them. New text is set in the matching standard PDF font
+  (Helvetica, Times or Courier family), or in an Android system font when it needs characters outside Latin-1.
+  The document's own font is only reused when it is a simple font that still contains every glyph you typed;
+  subset or embedded composite fonts (typical for Word / Chrome / LibreOffice PDFs) cannot be reused, so the
+  closest standard font is used instead, which is similar but not identical.
+* **Android text replacement** has three tiers, best first: (1) swap the string inside the original font;
+  (2) remove the original text operators from the page, keeping their width so nothing moves, and draw the new text in
+  the matched font - the old text is really gone from the file; (3) only if the text shares operators with other
+  text, or uses unusual operators or Type 3 fonts, paint over it with a box in the sampled background colour and draw
+  the new text on top, in which case **the old text stays in the file** (the save message says so).
+* **iOS** can only do the cover-and-overwrite variant, because PDFKit does not expose page content, though the new
+  text uses the font detected from the selection. Added text is a standard FreeText annotation. Inserting an image
+  rebuilds the file and flattens existing annotations.
+* Edits are applied and saved as a new version immediately; undo them from version history.
+* Scanned pages have no text to edit; run OCR first (OCR text is invisible and sits over the scan, so editing it
+  does not change what you see).
 * Neither platform is a redaction tool; do not use text edits to remove sensitive information.
 * Edits assume unrotated pages; text in rotated pages or rotated images may be positioned wrongly.
 * Fonts: new text uses the device's system font (Android) or the system font (iOS); the original font is not matched.

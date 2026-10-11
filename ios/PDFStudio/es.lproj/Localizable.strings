@@ -65,3 +65,9 @@
 "meta_author" = "Autor";
 "meta_subject" = "Asunto";
 "meta_keywords" = "Palabras clave (separadas por comas)";
+"edit_font" = "Fuente";
+"font_sans" = "Sans";
+"font_serif" = "Serif";
+"font_mono" = "Mono";
+"font_bold" = "Negrita";
+"font_italic" = "Cursiva";
