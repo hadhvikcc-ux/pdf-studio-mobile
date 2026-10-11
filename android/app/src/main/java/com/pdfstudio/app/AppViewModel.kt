@@ -206,6 +206,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun addEdit(op: EditOp) { edits.add(op) }
     fun discardEdits() { edits.clear() }
 
+    /** Queues [op] and saves it as a new version straight away, so the user sees the result immediately. */
+    fun applyEdit(op: EditOp) {
+        val s = session
+        viewModelScope.launch {
+            // If the old text has to be painted over, use the page's own background rather than assuming white.
+            val prepared = if (op is EditOp.ReplaceText && s != null) {
+                op.copy(cover = runCatching { sampleBackground(s, op) }.getOrDefault(0xFFFFFF))
+            } else op
+            edits.add(prepared)
+            saveEdits()
+        }
+    }
+
+    private suspend fun sampleBackground(s: PdfSession, op: EditOp.ReplaceText): Int {
+        val bmp = s.render(op.page, 700)
+        try {
+            val r = op.run
+            val midY = (r.top + r.bottom) / 2
+            val midX = (r.left + r.right) / 2
+            val points = listOf(r.left - 0.006f to midY, r.right + 0.006f to midY, midX to r.top - 0.004f, midX to r.bottom + 0.004f)
+            val colors = points.map { (x, y) ->
+                bmp.getPixel((x * bmp.width).toInt().coerceIn(0, bmp.width - 1), (y * bmp.height).toInt().coerceIn(0, bmp.height - 1))
+            }
+            fun median(shift: Int) = colors.map { (it shr shift) and 0xFF }.sorted().let { (it[1] + it[2]) / 2 }
+            return (median(16) shl 16) or (median(8) shl 8) or median(0)
+        } finally {
+            bmp.recycle()
+        }
+    }
+
     /** Reads a picked image and queues it, centred on ([nx], [ny]) or fitted into [replaces]. */
     fun placeImage(uri: Uri, page: Int, nx: Float, ny: Float, replaces: ImageBox?) = launchIo {
         val s = session ?: return@launchIo
@@ -231,7 +261,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val top = (ny - h / 2).coerceIn(0f, (1f - h).coerceAtLeast(0f))
             listOf(left, top, left + w, top + h)
         }
-        withContext(Dispatchers.Main) { edits.add(EditOp.PlaceImage(page, l, t, r, b, bytes, replaces)) }
+        withContext(Dispatchers.Main) { edits.add(EditOp.PlaceImage(page, l, t, r, b, bytes, replaces)); saveEdits() }
     }
 
     fun saveEdits() = launchIo {
@@ -242,8 +272,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val r = PdfEditor.apply(repo.current(d.id).second, dst, ops)
         withContext(Dispatchers.Main) {
             edits.clear(); loadCurrent()
-            message = if (r.covered > 0) Msg(R.string.edit_saved_covered, listOf(r.applied, r.replacedInPlace, r.covered, n))
-            else Msg(R.string.edit_saved, listOf(r.applied, r.replacedInPlace, n))
+            message = if (r.covered > 0) Msg(R.string.edit_saved_covered, listOf(r.applied, r.covered, n))
+            else Msg(R.string.edit_saved, listOf(r.applied, n))
         }
     }
 
