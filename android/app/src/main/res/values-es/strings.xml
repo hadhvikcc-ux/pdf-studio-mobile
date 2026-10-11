@@ -70,11 +70,17 @@
     <string name="edit_add_image">Añadir imagen en su lugar…</string>
     <string name="edit_save">Guardar ediciones (%1$d)</string>
     <string name="edit_discard">Descartar</string>
-    <string name="edit_saved">%1$d edición(es) aplicadas, %2$d reemplazadas en el texto. Guardado como versión %3$d</string>
-    <string name="edit_saved_covered">%1$d edición(es): %2$d reemplazadas en el texto, %3$d cubiertas. Guardado como versión %4$d. El texto cubierto está oculto pero sigue en el archivo.</string>
     <string name="edit_properties">Editar propiedades del documento</string>
     <string name="meta_title">Título</string>
     <string name="meta_author">Autor</string>
     <string name="meta_subject">Asunto</string>
     <string name="meta_keywords">Palabras clave</string>
+    <string name="edit_saved">%1$d edición(es) aplicadas. Guardado como versión %2$d</string>
+    <string name="edit_saved_covered">%1$d edición(es) aplicadas; en %2$d solo se pudo tapar el texto, así que el original está oculto pero sigue en el archivo. Guardado como versión %3$d</string>
+    <string name="edit_no_text_note">Esta página no tiene texto seleccionable (puede ser un escaneo), así que no hay nada que editar. Ejecuta OCR primero o añade texto nuevo.</string>
+    <string name="font_sans">Sans-serif</string>
+    <string name="font_serif">Serif</string>
+    <string name="font_mono">Monoespaciada</string>
+    <string name="font_bold">Negrita</string>
+    <string name="font_italic">Cursiva</string>
 </resources>

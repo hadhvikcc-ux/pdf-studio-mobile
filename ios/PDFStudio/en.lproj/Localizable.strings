@@ -65,3 +65,9 @@
 "meta_author" = "Author";
 "meta_subject" = "Subject";
 "meta_keywords" = "Keywords (comma separated)";
+"edit_font" = "Font";
+"font_sans" = "Sans";
+"font_serif" = "Serif";
+"font_mono" = "Mono";
+"font_bold" = "Bold";
+"font_italic" = "Italic";

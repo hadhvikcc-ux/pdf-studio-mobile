@@ -7,6 +7,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -78,13 +79,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import com.pdfstudio.app.AppViewModel
 import com.pdfstudio.app.R
 import com.pdfstudio.app.ToolOp
 import com.pdfstudio.app.data.Annot
 import com.pdfstudio.app.edit.EditOp
+import com.pdfstudio.app.edit.Family
+import com.pdfstudio.app.edit.RunStyle
 import com.pdfstudio.app.edit.ImageBox
 import com.pdfstudio.app.edit.InfoFields
 import com.pdfstudio.app.edit.PageContent
@@ -101,7 +108,7 @@ private enum class Dlg { None, Search, Navigate, Tools, Versions, Sync, Meta }
 private sealed interface EditTarget {
     data class Text(val page: Int, val run: TextRun) : EditTarget
     data class Image(val page: Int, val box: ImageBox) : EditTarget
-    data class Empty(val page: Int, val x: Float, val y: Float) : EditTarget
+    data class Empty(val page: Int, val x: Float, val y: Float, val suggested: RunStyle, val pageHasText: Boolean) : EditTarget
 }
 
 private const val INK = 0xC62828
@@ -239,10 +246,10 @@ fun ViewerScreen(vm: AppViewModel) {
                 val renderW = (baseWpx * step).roundToInt().coerceIn(200, 3200)
                 LazyColumn(
                     state = listState,
-                    userScrollEnabled = tool == Tool.None,
+                    userScrollEnabled = tool == Tool.None || tool == Tool.Edit,
                     modifier = Modifier
                         .fillMaxSize()
-                        .transformable(state = zoomState, canPan = { scale > 1f }, enabled = tool == Tool.None)
+                        .transformable(state = zoomState, canPan = { scale > 1f }, enabled = tool == Tool.None || tool == Tool.Edit)
                         .pointerInput(tool) {
                             if (tool == Tool.None) detectTapGestures(onDoubleTap = {
                                 scale = if (scale > 1.2f) 1f else 2f
@@ -255,11 +262,16 @@ fun ViewerScreen(vm: AppViewModel) {
                             session = session, index = i, renderWidthPx = renderW,
                             widthPx = baseWpx * scale, offsetX = offX, tool = tool, vm = vm, night = night,
                             aspect = session.aspect,
-                            onEditTap = { p, x, y, run, img ->
+                            onEditTap = { p, x, y, run, img, content ->
                                 editTarget = when {
                                     run != null -> EditTarget.Text(p, run)
                                     img != null -> EditTarget.Image(p, img)
-                                    else -> EditTarget.Empty(p, x, y)
+                                    else -> EditTarget.Empty(
+                                        p, x, y,
+                                        // Start from the style of the nearest line so new text blends in.
+                                        suggested = content?.runs?.minByOrNull { r -> kotlin.math.abs((r.top + r.bottom) / 2 - y) }?.style ?: RunStyle(),
+                                        pageHasText = content?.runs?.isNotEmpty() == true
+                                    )
                                 }
                             }
                         )
@@ -336,8 +348,11 @@ fun ViewerScreen(vm: AppViewModel) {
     when (val t = editTarget) {
         null -> Unit
         is EditTarget.Text -> EditTextDialog(
-            title = R.string.edit_text, initial = t.run.text, showSize = false,
-            onApply = { text, _ -> editTarget = null; if (text != t.run.text) vm.addEdit(EditOp.ReplaceText(t.page, t.run, text)) },
+            title = R.string.edit_text, initial = t.run.text, initialStyle = t.run.style, note = null,
+            onApply = { text, style ->
+                editTarget = null
+                if (text != t.run.text || style != t.run.style) vm.applyEdit(EditOp.ReplaceText(t.page, t.run, text, style))
+            },
             onCancel = { editTarget = null }
         )
         is EditTarget.Image -> AlertDialog(
@@ -345,7 +360,7 @@ fun ViewerScreen(vm: AppViewModel) {
             title = { Text(stringResource(R.string.edit_image)) },
             text = {
                 Column {
-                    TextButton(onClick = { editTarget = null; vm.addEdit(EditOp.DeleteImage(t.page, t.box)) }) { Text(stringResource(R.string.edit_image_delete)) }
+                    TextButton(onClick = { editTarget = null; vm.applyEdit(EditOp.DeleteImage(t.page, t.box)) }) { Text(stringResource(R.string.edit_image_delete)) }
                     TextButton(onClick = { pickFor = t; editTarget = null; imagePicker.launch("image/*") }) { Text(stringResource(R.string.edit_image_replace)) }
                 }
             },
@@ -353,8 +368,9 @@ fun ViewerScreen(vm: AppViewModel) {
             dismissButton = { TextButton(onClick = { editTarget = null }) { Text(stringResource(R.string.cancel)) } }
         )
         is EditTarget.Empty -> EditTextDialog(
-            title = R.string.edit_add_text, initial = "", showSize = true,
-            onApply = { text, size -> editTarget = null; vm.addEdit(EditOp.AddText(t.page, t.x, t.y, text, size)) },
+            title = R.string.edit_add_text, initial = "", initialStyle = t.suggested,
+            note = if (t.pageHasText) null else stringResource(R.string.edit_no_text_note),
+            onApply = { text, style -> editTarget = null; vm.applyEdit(EditOp.AddText(t.page, t.x, t.y, text, style)) },
             onCancel = { editTarget = null },
             extra = {
                 TextButton(onClick = { pickFor = t; editTarget = null; imagePicker.launch("image/*") }) { Text(stringResource(R.string.edit_add_image)) }
@@ -375,7 +391,7 @@ fun ViewerScreen(vm: AppViewModel) {
 private fun PageView(
     session: PdfSession, index: Int, renderWidthPx: Int, widthPx: Float, offsetX: Float,
     tool: Tool, vm: AppViewModel, night: Boolean, aspect: Float,
-    onEditTap: (page: Int, x: Float, y: Float, run: TextRun?, image: ImageBox?) -> Unit
+    onEditTap: (page: Int, x: Float, y: Float, run: TextRun?, image: ImageBox?, content: PageContent?) -> Unit
 ) {
     val content by produceState<PageContent?>(null, vm.version, index, tool == Tool.Edit) {
         value = if (tool == Tool.Edit) vm.pageContent(index) else null
@@ -418,7 +434,7 @@ private fun PageView(
                         val ny = o.y / size.height
                         val run = content?.runs?.firstOrNull { nx in it.left..it.right && ny in it.top..it.bottom }
                         val img = if (run == null) content?.images?.firstOrNull { nx in it.left..it.right && ny in it.top..it.bottom } else null
-                        onEditTap(index, nx, ny, run, img)
+                        onEditTap(index, nx, ny, run, img, content)
                     }
                     else -> detectDragGestures(
                         onDragStart = { o -> live = listOf(o.x / size.width, o.y / size.height) },
@@ -469,18 +485,16 @@ private fun PageView(
                     drawRect(Color(0xFFFB8C00), Offset(it.left * w, it.top * h), androidx.compose.ui.geometry.Size((it.right - it.left) * w, (it.bottom - it.top) * h), style = Stroke(3f))
                 }
                 // Preview of queued edits; the real result appears once saved.
-                val paint = android.graphics.Paint().apply { color = android.graphics.Color.BLACK; isAntiAlias = true }
                 vm.edits.filter { it.page == index }.forEach { op ->
                     when (op) {
                         is EditOp.ReplaceText -> {
                             val r = op.run
-                            drawRect(Color.White, Offset(r.left * w, r.top * h), androidx.compose.ui.geometry.Size((r.right - r.left) * w, (r.bottom - r.top) * h))
+                            drawRect(Color(0xFF000000.toInt() or op.cover), Offset(r.left * w, r.top * h), androidx.compose.ui.geometry.Size((r.right - r.left) * w, (r.bottom - r.top) * h))
                             drawRect(Color(0xFF43A047), Offset(r.left * w, r.top * h), androidx.compose.ui.geometry.Size((r.right - r.left) * w, (r.bottom - r.top) * h), style = Stroke(2f))
-                            paint.textSize = (r.bottom - r.top) * h * 0.75f
-                            drawContext.canvas.nativeCanvas.drawText(op.newText, r.left * w, r.baseline * h, paint)
+                            drawContext.canvas.nativeCanvas.drawText(op.newText, r.left * w, r.baseline * h, previewPaint(op.style, w))
                         }
                         is EditOp.AddText -> {
-                            paint.textSize = op.sizePt / 595f * w // preview assumes an A4-wide page
+                            val paint = previewPaint(op.style, w)
                             drawContext.canvas.nativeCanvas.drawText(op.text, op.x * w, op.y * h + paint.textSize, paint)
                         }
                         is EditOp.DeleteImage -> drawRect(Color(0x66E53935), Offset(op.image.left * w, op.image.top * h), androidx.compose.ui.geometry.Size((op.image.right - op.image.left) * w, (op.image.bottom - op.image.top) * h))
@@ -607,34 +621,80 @@ private fun NavigateDialog(vm: AppViewModel, session: PdfSession, onGo: (Int) ->
     )
 }
 
+/** Rough on-screen preview of queued text; assumes an A4-wide page for the point-to-pixel scale. */
+private fun previewPaint(style: RunStyle, pageWidthPx: Float): android.graphics.Paint = android.graphics.Paint().apply {
+    isAntiAlias = true
+    color = 0xFF000000.toInt() or style.rgb
+    textSize = style.sizePt / 595f * pageWidthPx
+    typeface = android.graphics.Typeface.create(
+        when (style.family) {
+            Family.Sans -> android.graphics.Typeface.SANS_SERIF
+            Family.Serif -> android.graphics.Typeface.SERIF
+            Family.Mono -> android.graphics.Typeface.MONOSPACE
+        },
+        when {
+            style.bold && style.italic -> android.graphics.Typeface.BOLD_ITALIC
+            style.bold -> android.graphics.Typeface.BOLD
+            style.italic -> android.graphics.Typeface.ITALIC
+            else -> android.graphics.Typeface.NORMAL
+        }
+    )
+}
+
+/**
+ * Text entry with font controls. The controls start at the style detected in the document (or at the nearest
+ * line's style when adding), so untouched text keeps the document's look; the field itself previews the choice.
+ */
 @Composable
 private fun EditTextDialog(
-    title: Int, initial: String, showSize: Boolean,
-    onApply: (text: String, sizePt: Float) -> Unit, onCancel: () -> Unit,
+    title: Int, initial: String, initialStyle: RunStyle, note: String?,
+    onApply: (text: String, style: RunStyle) -> Unit, onCancel: () -> Unit,
     extra: (@Composable () -> Unit)? = null
 ) {
     var text by remember { mutableStateOf(initial) }
-    var size by remember { mutableStateOf("14") }
+    var family by remember { mutableStateOf(initialStyle.family) }
+    var bold by remember { mutableStateOf(initialStyle.bold) }
+    var italic by remember { mutableStateOf(initialStyle.italic) }
+    val initialSize = remember { initialStyle.sizePt.roundToInt().coerceAtLeast(1).toString() }
+    var size by remember { mutableStateOf(initialSize) }
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text(stringResource(title)) },
         text = {
-            Column {
-                OutlinedTextField(text, { text = it }, label = { Text(stringResource(R.string.edit_text_hint)) })
-                if (showSize) {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp)) }
+                OutlinedTextField(
+                    text, { text = it }, label = { Text(stringResource(R.string.edit_text_hint)) },
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = when (family) { Family.Sans -> FontFamily.SansSerif; Family.Serif -> FontFamily.Serif; Family.Mono -> FontFamily.Monospace },
+                        fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+                        fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
+                        fontSize = 16.sp
+                    )
+                )
+                Row(Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(family == Family.Sans, { family = Family.Sans }, { Text(stringResource(R.string.font_sans)) })
+                    FilterChip(family == Family.Serif, { family = Family.Serif }, { Text(stringResource(R.string.font_serif)) })
+                    FilterChip(family == Family.Mono, { family = Family.Mono }, { Text(stringResource(R.string.font_mono)) })
+                }
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    FilterChip(bold, { bold = !bold }, { Text(stringResource(R.string.font_bold)) })
+                    FilterChip(italic, { italic = !italic }, { Text(stringResource(R.string.font_italic)) })
                     OutlinedTextField(
                         size, { size = it.filter { c -> c.isDigit() }.take(3) },
                         label = { Text(stringResource(R.string.edit_font_size)) }, singleLine = true,
-                        modifier = Modifier.padding(top = 8.dp)
+                        modifier = Modifier.width(110.dp)
                     )
                 }
                 extra?.invoke()
             }
         },
         confirmButton = {
-            TextButton(enabled = text.isNotBlank(), onClick = { onApply(text, (size.toFloatOrNull() ?: 14f).coerceIn(4f, 200f)) }) {
-                Text(stringResource(R.string.apply))
-            }
+            TextButton(enabled = text.isNotBlank(), onClick = {
+                // Keep the exact detected size unless the user typed a different one.
+                val sizePt = if (size == initialSize) initialStyle.sizePt else (size.toFloatOrNull() ?: initialStyle.sizePt).coerceIn(4f, 200f)
+                onApply(text, RunStyle(family, bold, italic, sizePt, initialStyle.rgb))
+            }) { Text(stringResource(R.string.apply)) }
         },
         dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) } }
     )

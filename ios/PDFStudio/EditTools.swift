@@ -10,6 +10,67 @@ import UIKit
 /// - Inserting an image rebuilds the document through Core Graphics, which flattens existing annotations into the
 ///   page (they stay visible but are no longer editable).
 enum EditTools {
+    /// Font, weight, size and colour of a piece of text. `infer` reads them from a PDF font name so that new
+    /// text can look like the text already in the document.
+    struct TextStyle: Equatable {
+        enum Family: String, CaseIterable { case sans, serif, mono }
+
+        var family = Family.sans
+        var bold = false
+        var italic = false
+        var size: CGFloat = 14
+        var color: UIColor = .black
+
+        private static let boldWords = ["bold", "black", "heavy", "semibold", "demibold", "extrabold"]
+        private static let monoWords = ["courier", "mono", "consolas", "menlo", "typewriter", "lucidaconsole", "inconsolata"]
+        private static let serifWords = [
+            "times", "serif", "georgia", "garamond", "cambria", "palatino", "bookman", "minion", "century",
+            "baskerville", "didot", "caslon", "charter", "roman", "constantia", "bookantiqua",
+        ]
+
+        /// "ABCDEF+TimesNewRomanPS-BoldMT" -> serif, bold.
+        static func infer(fontName: String, size: CGFloat, color: UIColor = .black) -> TextStyle {
+            let tail = fontName.split(separator: "+").last.map(String.init) ?? fontName
+            let name = String(tail.lowercased().filter { $0 >= "a" && $0 <= "z" })
+            var s = TextStyle(size: size, color: color)
+            s.bold = boldWords.contains { name.contains($0) }
+            s.italic = name.contains("italic") || name.contains("oblique")
+            if monoWords.contains(where: { name.contains($0) }) {
+                s.family = .mono
+            } else if name.contains("sans") {
+                s.family = .sans
+            } else if serifWords.contains(where: { name.contains($0) }) {
+                s.family = .serif
+            }
+            return s
+        }
+
+        var uiFont: UIFont {
+            let familyName: String
+            switch family {
+            case .sans: familyName = "Helvetica"
+            case .serif: familyName = "Times New Roman"
+            case .mono: familyName = "Courier New"
+            }
+            var traits: UIFontDescriptor.SymbolicTraits = []
+            if bold { traits.insert(.traitBold) }
+            if italic { traits.insert(.traitItalic) }
+            let base = UIFontDescriptor(fontAttributes: [.family: familyName])
+            let descriptor = base.withSymbolicTraits(traits) ?? base
+            return UIFont(descriptor: descriptor, size: size)
+        }
+    }
+
+    /// Style of the text in a selection, read from the attributes PDFKit reports for it.
+    static func style(of selection: PDFSelection, fallbackSize: CGFloat) -> TextStyle {
+        guard let attributed = selection.attributedString, attributed.length > 0 else { return TextStyle(size: fallbackSize) }
+        let attrs = attributed.attributes(at: 0, effectiveRange: nil)
+        let font = attrs[.font] as? UIFont
+        let color = attrs[.foregroundColor] as? UIColor ?? .black
+        let size = (font?.pointSize ?? 0) > 1 ? font!.pointSize : fallbackSize
+        return TextStyle.infer(fontName: font?.fontName ?? "", size: size, color: color)
+    }
+
     struct Info: Equatable {
         var title = ""
         var author = ""
@@ -17,11 +78,11 @@ enum EditTools {
         var keywords = ""
     }
 
-    static func freeText(_ text: String, in bounds: CGRect, size: CGFloat) -> PDFAnnotation {
+    static func freeText(_ text: String, in bounds: CGRect, style: TextStyle) -> PDFAnnotation {
         let a = PDFAnnotation(bounds: bounds, forType: .freeText, withProperties: nil)
         a.contents = text
-        a.font = UIFont.systemFont(ofSize: size)
-        a.fontColor = .black
+        a.font = style.uiFont
+        a.fontColor = style.color
         a.color = .clear
         a.alignment = .left
         let border = PDFBorder()
@@ -32,17 +93,20 @@ enum EditTools {
 
     /// New text with its top-left corner at `point` (PDF page coordinates, origin bottom-left).
     @discardableResult
-    static func addText(_ text: String, at point: CGPoint, size: CGFloat, on page: PDFPage) -> PDFAnnotation {
-        let width = max(80, CGFloat(text.count) * size * 0.6)
-        let box = CGRect(x: point.x, y: point.y - size * 1.4, width: width, height: size * 1.4)
-        let a = freeText(text, in: box, size: size)
+    static func addText(_ text: String, at point: CGPoint, style: TextStyle, on page: PDFPage) -> PDFAnnotation {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let longest = lines.map(\.count).max() ?? text.count
+        let width = max(80, CGFloat(longest) * style.size * 0.6)
+        let height = style.size * 1.4 * CGFloat(max(lines.count, 1))
+        let box = CGRect(x: point.x, y: point.y - height, width: width, height: height)
+        let a = freeText(text, in: box, style: style)
         page.addAnnotation(a)
         return a
     }
 
     /// Covers `bounds` with a white box and writes `text` over it.
     @discardableResult
-    static func replaceLine(on page: PDFPage, bounds: CGRect, with text: String) -> (cover: PDFAnnotation, text: PDFAnnotation) {
+    static func replaceLine(on page: PDFPage, bounds: CGRect, with text: String, style: TextStyle) -> (cover: PDFAnnotation, text: PDFAnnotation) {
         let pad: CGFloat = 1
         let area = bounds.insetBy(dx: -pad, dy: -pad)
         let cover = PDFAnnotation(bounds: area, forType: .square, withProperties: nil)
@@ -53,7 +117,7 @@ enum EditTools {
         cover.border = border
         page.addAnnotation(cover)
 
-        let label = freeText(text, in: area, size: max(6, bounds.height * 0.8))
+        let label = freeText(text, in: area, style: style)
         page.addAnnotation(label)
         return (cover, label)
     }

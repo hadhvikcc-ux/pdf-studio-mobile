@@ -70,11 +70,17 @@
     <string name="edit_add_image">Add image instead…</string>
     <string name="edit_save">Save edits (%1$d)</string>
     <string name="edit_discard">Discard</string>
-    <string name="edit_saved">Applied %1$d edit(s), %2$d replaced in place. Saved as version %3$d</string>
-    <string name="edit_saved_covered">Applied %1$d edit(s): %2$d replaced in place, %3$d covered. Saved as version %4$d. Covered text is hidden but still in the file.</string>
     <string name="edit_properties">Edit document properties</string>
     <string name="meta_title">Title</string>
     <string name="meta_author">Author</string>
     <string name="meta_subject">Subject</string>
     <string name="meta_keywords">Keywords</string>
+    <string name="edit_saved">Applied %1$d edit(s). Saved as version %2$d</string>
+    <string name="edit_saved_covered">Applied %1$d edit(s); %2$d could only be painted over, so the original text is hidden but still in the file. Saved as version %3$d</string>
+    <string name="edit_no_text_note">This page has no selectable text (it may be a scan), so there is nothing to edit in place. Run OCR first or add new text.</string>
+    <string name="font_sans">Sans-serif</string>
+    <string name="font_serif">Serif</string>
+    <string name="font_mono">Monospace</string>
+    <string name="font_bold">Bold</string>
+    <string name="font_italic">Italic</string>
 </resources>
